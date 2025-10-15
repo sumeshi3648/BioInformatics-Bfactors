@@ -14,6 +14,7 @@ import csv
 import json
 import re
 from pathlib import Path
+import time
 
 import pandas as pd
 import requests
@@ -34,11 +35,14 @@ def read_table(path):
     df["uniprot"] = df["uniprot"].str.strip()
     return df
 
-def uniprot_to_pdbs(acc):
+def uniprot_to_pdbs(acc: str) -> set[str]:
     """
     Map a UniProt accession to PDB entry IDs using the RCSB Search API.
-    Returns a set of 4-character PDB IDs (lowercase for filenames).
+    Robust to empty/HTML responses and transient errors.
     """
+    if not acc or not isinstance(acc, str):
+        return set()
+
     payload = {
         "query": {
             "type": "terminal",
@@ -52,12 +56,24 @@ def uniprot_to_pdbs(acc):
         "return_type": "entry",
         "request_options": {"return_all_hits": True}
     }
-    r = requests.post(RCSB_SEARCH_URL, json=payload, timeout=60)
-    r.raise_for_status()
-    data = r.json()
-    # results look like: {"result_set": [{"identifier": "1A2B"}, ...]}
-    pdb_ids = {hit["identifier"].lower() for hit in data.get("result_set", [])}
-    return pdb_ids
+
+    for attempt in range(3):
+        try:
+            r = requests.post(
+                RCSB_SEARCH_URL,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=60,
+            )
+            if r.status_code != 200 or not r.content or not r.content.strip():
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            data = r.json() 
+            return {hit["identifier"].lower() for hit in data.get("result_set", [])}
+        except Exception:
+            time.sleep(1.5 * (attempt + 1))  
+
+    return set()
 
 def download_mmcif(pdb_id, outdir):
     outdir.mkdir(parents=True, exist_ok=True)
