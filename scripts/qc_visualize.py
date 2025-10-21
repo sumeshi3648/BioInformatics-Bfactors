@@ -214,3 +214,102 @@ plt.title("Mean ± SD B-factors per receptor")
 plt.tight_layout()
 plt.savefig("data/meta/plots/mean_sd_bfactor_per_receptor.png", dpi=300)
 plt.close()
+
+
+# ============================
+# normalization by resolution bins
+# ============================
+
+# attach resolution to every residue B-factor row
+bf_with_res = bf.merge(meta[["pdb_id","resolution"]], on="pdb_id", how="left")
+bf_with_res = bf_with_res.dropna(subset=["resolution", "bfactor"])
+
+# define resolution bins
+bin_edges  = [1.0, 2.0, 2.5, 3.0, 3.5, 4.5, 10.0]
+bin_labels = ["1.0–2.0", "2.0–2.5", "2.5–3.0", "3.0–3.5", "3.5–4.5", "4.5–10.0"]
+bf_with_res["res_bin"] = pd.cut(bf_with_res["resolution"], bins=bin_edges,
+                                labels=bin_labels, include_lowest=True, right=True)
+
+# bin stats
+bin_stats = (bf_with_res.groupby("res_bin")["bfactor"]
+             .agg(mean_bin="mean", std_bin="std").reset_index())
+
+# if std_bin is 0 or NaN (very small bin), set a floor value
+EPS = 1e-6
+bin_stats["std_bin"] = bin_stats["std_bin"].fillna(0.0).clip(lower=EPS)
+
+# merge stats back and compute z-score per residue: z = (B - mean_bin) / std_bin
+bf_norm = bf_with_res.merge(bin_stats, on="res_bin", how="left")
+bf_norm["z_bfactor"] = (bf_norm["bfactor"] - bf_norm["mean_bin"]) / bf_norm["std_bin"]
+
+# save normalized residue-level table
+norm_out = Path("data/processed/ca_bfactors_normalized.csv")
+bf_norm.to_csv(norm_out, index=False)
+print(f"\nWrote z-normalized residue table → {norm_out}")
+
+# average z across its residues
+summary_norm = (bf_norm.groupby("pdb_id")["z_bfactor"]
+                .agg(mean_norm="mean", std_norm="std", count="count")
+                .reset_index()
+                .merge(meta, on="pdb_id", how="left"))
+summary_norm_out = Path("data/meta/structure_summary_normalized.csv")
+summary_norm.to_csv(summary_norm_out, index=False)
+print(f"Wrote normalized per-structure summary → {summary_norm_out}")
+
+# correlation check: before vs after normalization
+raw_summary = pd.read_csv("data/meta/structure_summary.csv").dropna(subset=["mean","resolution"])
+print("Correlation BEFORE normalization (resolution vs mean B):",
+      f"{raw_summary['resolution'].corr(raw_summary['mean']):.3f}")
+
+summary_norm_clean = summary_norm.dropna(subset=["mean_norm","resolution"])
+print("Correlation AFTER normalization (resolution vs mean_norm):",
+      f"{summary_norm_clean['resolution'].corr(summary_norm_clean['mean_norm']):.3f}")
+
+
+
+#plot: Resolution vs mean_norm 
+plt.figure(figsize=(7,6))
+plt.scatter(summary_norm_clean["resolution"], summary_norm_clean["mean_norm"], alpha=0.6)
+plt.xlabel("Resolution (Å)")
+plt.ylabel("Mean normalized Cα B-factor (z)")
+plt.title("Resolution vs mean normalized B-factor per structure")
+#best-fit line
+a2, b2 = np.polyfit(summary_norm_clean["resolution"], summary_norm_clean["mean_norm"], 1)
+xx = np.array([summary_norm_clean["resolution"].min(), summary_norm_clean["resolution"].max()])
+plt.plot(xx, a2*xx + b2, linestyle="--", label=f"y={a2:.2f}x+{b2:.2f}")
+plt.legend()
+plt.tight_layout()
+plt.savefig(plot_dir / "resolution_vs_mean_norm_bfactor.png", dpi=300)
+plt.close()
+
+# Plot: Mean normalized B-factor per receptor
+per_receptor_norm = (summary_norm_clean.groupby("symbol")["mean_norm"]
+                     .mean().sort_values())
+plt.figure(figsize=(10,12))
+per_receptor_norm.plot(kind="barh")
+plt.xlabel("Mean normalized Cα B-factor (z)")
+plt.title("Normalized flexibility per receptor (mean of structure z-means)")
+plt.tight_layout()
+plt.savefig(plot_dir / "mean_norm_bfactor_per_receptor.png", dpi=300)
+plt.close()
+
+
+# Per-receptor correlation
+def _safe_corr(g):
+    g = g.dropna(subset=["resolution","mean_norm"])
+    return g["resolution"].corr(g["mean_norm"]) if len(g) > 2 else np.nan
+
+
+corr_per_receptor_norm = (summary_norm.groupby("symbol", group_keys=False, include_groups=False)
+                          .apply(_safe_corr)
+                          .reset_index(name="correlation_norm"))
+
+corr_per_receptor_norm.to_csv("data/meta/correlation_per_receptor_NORMALIZED.csv", index=False)
+print("\nSaved: correlation_per_receptor_NORMALIZED.csv")
+
+# Per-subfamily correlation
+corr_per_subfam_norm = (summary_norm.groupby("subfamily", group_keys=False, include_groups=False)
+                        .apply(_safe_corr)
+                        .reset_index(name="correlation_norm"))
+corr_per_subfam_norm.to_csv("data/meta/correlation_per_subfamily_NORMALIZED.csv", index=False)
+print("Saved: correlation_per_subfamily_NORMALIZED.csv")
