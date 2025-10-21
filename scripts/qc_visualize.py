@@ -7,11 +7,17 @@ Saves plots to PNGs instead of showing interactive windows.
 from pathlib import Path
 import pandas as pd
 import numpy as np
+import warnings
 
 # --- make matplotlib non-interactive & fast ---
 import matplotlib
 matplotlib.use("Agg")           # render to files, not GUI
 import matplotlib.pyplot as plt
+
+#ignore warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+warnings.filterwarnings("ignore", category=pd.errors.DtypeWarning)
 
 # Paths
 meta_path = Path("data/meta/structures.csv")
@@ -141,17 +147,9 @@ summary = (bf.groupby("pdb_id")["bfactor"]
 summary_out = Path("data/meta/structure_summary.csv")
 summary.to_csv(summary_out, index=False)
 
-print("\n📄 Summary saved:", summary_out)
+print("\nSummary saved:", summary_out)
 print("Plots saved to:", plot_dir)
 print("QC complete (non-interactive).")
-
-# --- Compute global correlation (all structures combined) ---
-summary = pd.read_csv("data/meta/structure_summary.csv")
-summary = summary.dropna(subset=["mean", "resolution"])
-
-corr_global = summary["resolution"].corr(summary["mean"])
-print(f"\nGlobal correlation (resolution vs mean B-factor): {corr_global:.3f}")
-
 
 # --- Per-receptor correlation ---
 corr_per_receptor = (
@@ -161,8 +159,6 @@ corr_per_receptor = (
            .reset_index(name="correlation")
 )
 # --- Per-subfamily correlation ---
-print("\nCorrelation per receptor:")
-print(corr_per_receptor.sort_values("correlation", ascending=False))
 corr_per_receptor.to_csv("data/meta/correlation_per_receptor.csv", index=False)
 
 
@@ -173,8 +169,6 @@ corr_per_subfam = (
            .reset_index(name="correlation")
 )
 
-print("\nCorrelation per subfamily:")
-print(corr_per_subfam.sort_values("correlation", ascending=False))
 corr_per_subfam.to_csv("data/meta/correlation_per_subfamily.csv", index=False)
 
 # --- Mean ± SD B-factors and all resolutions per receptor ---
@@ -300,7 +294,7 @@ def _safe_corr(g):
     return g["resolution"].corr(g["mean_norm"]) if len(g) > 2 else np.nan
 
 
-corr_per_receptor_norm = (summary_norm.groupby("symbol", group_keys=False, include_groups=False)
+corr_per_receptor_norm = (summary_norm.groupby("symbol", group_keys=False)
                           .apply(_safe_corr)
                           .reset_index(name="correlation_norm"))
 
@@ -308,7 +302,7 @@ corr_per_receptor_norm.to_csv("data/meta/correlation_per_receptor_NORMALIZED.csv
 print("\nSaved: correlation_per_receptor_NORMALIZED.csv")
 
 # Per-subfamily correlation
-corr_per_subfam_norm = (summary_norm.groupby("subfamily", group_keys=False, include_groups=False)
+corr_per_subfam_norm = (summary_norm.groupby("subfamily", group_keys=False)
                         .apply(_safe_corr)
                         .reset_index(name="correlation_norm"))
 corr_per_subfam_norm.to_csv("data/meta/correlation_per_subfamily_NORMALIZED.csv", index=False)
